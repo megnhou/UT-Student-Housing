@@ -1,169 +1,113 @@
-# UT-Student-Housing
-monthly cash-flow simulation comparing buying a West Campus 2x2 condo and renting out a room against renting a bedroom and investing the same cash
-"""
-West Campus 2x2: buy a condo and rent out the spare room, vs. rent a bedroom.
+# Austin Student Housing: Rent vs. Buy
 
-Two paths, same starting cash:
-  BUY   Family buys a 2-bed/2-bath condo near UT. The student lives in one room, a
-        roommate rents the other. The family pays all ownership costs and sells later.
-  RENT  The student rents one bedroom in a similar 2x2 and invests the cash that
-        would have gone into the condo.
+A Python and JavaScript model that asks a practical question for UT Austin students and their families: **is it cheaper to buy a West Campus 2-bed, 2-bath condo, live in one room, and rent out the other, or to rent a bedroom and invest the money instead?**
 
-Each month, whichever path has the lower cash outlay invests the difference, so both
-families spend identical cash. We compare net worth at the end.
+[Live interactive version](ADD-YOUR-LINK-HERE) · Data gathered October 2026
 
-Data used for defaults (searched Oct 2026):
-  * West Campus 2x2 condos listed for sale: about $250K-$420K, most near $360K.
-  * HOA fees on those listings: $285-$495/month (often cover water, trash, parking).
-  * Condos include 2 reserved parking spaces in most listings.
-  * Whole 2x2 units rent for about $2,100-$2,400/month (about $1,050-$1,200 per room).
-  * Annual tax bills on listings: $6,500-$8,128 (1.8%-2.2% of price; no homestead
-    exemption, because the owner does not live there).
-  * Utilities (Austin Energy average bill ~$117-$150, internet $50-$80, water/trash
-    often in HOA or a ~$65 flat fee).
-Assumptions I could not find solid data for (marked ASSUMPTION): insurance, maintenance,
-vacancy, rental parking cost, investment-loan rate premium.
-"""
-from dataclasses import dataclass, replace
-import pandas as pd
+> This is a learning project, not financial advice.
 
+---
 
-@dataclass
-class Scenario:
-    # Buying the condo
-    price: float = 360_000
-    down_pct: float = 0.25            # 1.0 = all cash. Non-owner-occupied loans usually need 15-25%
-    mortgage_rate: float = 0.0775     # ASSUMPTION: Freddie Mac ~7.28% + ~0.5% investment/second-home premium
-    term_years: int = 30
-    property_tax_rate: float = 0.020  # listings imply 1.8%-2.2%; no homestead exemption
-    hoa_monthly: float = 380          # listings: $285-$495
-    insurance_annual: float = 1_100   # ASSUMPTION: landlord/condo policy
-    maintenance_pct: float = 0.005    # ASSUMPTION, of value per year
-    pmi_rate: float = 0.005           # annual, of loan, if balance > 80% of price
-    closing_pct: float = 0.03
-    selling_pct: float = 0.06
-    appreciation: float = 0.01        # recent Austin condo medians have been falling
-    # Roommate side
-    roommate_rent: float = 1_125      # half of a ~$2,250 whole-unit rent
-    vacancy: float = 0.08             # ASSUMPTION: about one month empty per year
-    utilities_total: float = 200      # electric ~$140 + internet ~$60; water/trash in HOA
-    roommate_util_share: float = 0.5
-    # If renting instead
-    own_bedroom_rent: float = 1_125
-    renter_utilities: float = 100     # your half
-    renter_parking: float = 75        # ASSUMPTION: many complexes include it, others charge $100+
-    renters_insurance_annual: float = 180
-    # Growth and investing
-    rent_growth: float = 0.02
-    cost_growth: float = 0.03         # HOA, insurance, utilities, parking
-    invest_return: float = 0.05
-    years: int = 10
+## The question
 
+Buying looks attractive on paper. A condo near campus can pay part of its own way through roommate rent, and the owner builds equity instead of paying a landlord. But buying also ties up a lot of cash, adds fees, and carries price risk. The goal here is to compare the two paths fairly and find out *what has to be true* for buying to win.
 
-def monthly_payment(loan, annual_rate, years):
-    n, r = years * 12, annual_rate / 12
-    return loan / n if r == 0 else loan * r / (1 - (1 + r) ** -n)
+## How the model works
 
+Both paths start with the same cash and spend the **same total cash each month**. Whichever path has the lower monthly outlay invests the difference, so neither side gets a free advantage.
 
-def simulate(s: Scenario) -> pd.DataFrame:
-    loan = s.price * (1 - s.down_pct)
-    pmt = monthly_payment(loan, s.mortgage_rate, s.term_years) if loan > 0 else 0.0
-    rm = s.mortgage_rate / 12
-    g_inv = (1 + s.invest_return) ** (1 / 12) - 1
-    g_home = (1 + s.appreciation) ** (1 / 12) - 1
+- **Buy path:** pay the down payment and closing costs, then monthly mortgage, property tax, HOA, insurance, maintenance, and utilities. Subtract roommate rent (after vacancy) and any utilities the roommate covers. Sell at the end, paying selling costs and any remaining loan.
+- **Rent path:** rent one bedroom, pay a share of utilities, parking, and renters insurance. Invest the cash that would have gone into the condo, plus any monthly savings.
+- **Result:** net worth for each path, year by year, and the difference (`buy_advantage`). A positive number means buying wins.
 
-    balance, value = loan, s.price
-    hoa, ins, util = s.hoa_monthly, s.insurance_annual / 12, s.utilities_total
-    room, mine = s.roommate_rent, s.own_bedroom_rent
-    r_util, r_park, r_ins = s.renter_utilities, s.renter_parking, s.renters_insurance_annual / 12
-    renter_port = s.price * s.down_pct + s.price * s.closing_pct
-    owner_port = 0.0
-    rows = []
+This framing is what makes the comparison honest: the real cost of owning includes the **opportunity cost** of the cash tied up in the condo, not just the bills.
 
-    for m in range(1, s.years * 12 + 1):
-        interest = balance * rm
-        principal = min(pmt - interest, balance) if balance > 0 else 0.0
-        balance -= principal
-        paying = pmt if (balance > 0 or principal > 0) else 0.0
-        pmi = loan * s.pmi_rate / 12 if balance > 0.8 * s.price else 0.0
-        tax = value * s.property_tax_rate / 12
-        maint = value * s.maintenance_pct / 12
+## Data
 
-        owner_out = paying + tax + hoa + ins + maint + pmi + util
-        owner_in = room * (1 - s.vacancy) + util * s.roommate_util_share
-        owner_net = owner_out - owner_in
-        renter_out = mine + r_util + r_park + r_ins
-        diff = owner_net - renter_out
+Inputs come from active listings and public sources (searched October 2026), with anything I couldn't find clearly labeled as an assumption.
 
-        renter_port *= 1 + g_inv
-        owner_port *= 1 + g_inv
-        if diff > 0:
-            renter_port += diff
-        else:
-            owner_port += -diff
+| Input | Default | Source / note |
+|---|---|---|
+| Condo price | $360,000 | West Campus 2x2 listings, about $250K to $420K |
+| HOA fee | $380/month | Listings range $285 to $495 |
+| Property tax | 2.0% of value | Listing tax bills imply 1.8% to 2.2%; no homestead exemption since the owner doesn't live there |
+| Roommate rent | $1,125/month | Whole 2x2 units rent for about $2,100 to $2,400 |
+| Mortgage rate | 7.75% | Freddie Mac 30-year average (7.28% on Oct 1, 2026) plus about 0.5 points for non-owner-occupied loans (*assumption*) |
+| Utilities | $200/month, whole unit | Austin Energy typical bill and internet costs |
+| Insurance, maintenance | $1,100/year, 0.5% of value | *Assumption* |
+| Vacancy | 8% | *Assumption* |
+| Parking if renting | $75/month | *Assumption*; most condo listings include two spaces |
+| Investment return | 5% a year | *Assumption*; the cost of tying up cash |
+| Condo price growth | 1% a year | *Assumption*; Austin condo medians were falling in early 2026 |
 
-        value *= 1 + g_home
-        if m % 12 == 0:
-            o = value * (1 - s.selling_pct) - balance + owner_port
-            rows.append({"year": m // 12, "home_value": value, "loan_balance": balance,
-                         "buy_net_worth": o, "rent_net_worth": renter_port,
-                         "buy_advantage": o - renter_port})
-            hoa *= 1 + s.cost_growth
-            ins *= 1 + s.cost_growth
-            util *= 1 + s.cost_growth
-            r_util *= 1 + s.cost_growth
-            r_park *= 1 + s.cost_growth
-            r_ins *= 1 + s.cost_growth
-            room *= 1 + s.rent_growth
-            mine *= 1 + s.rent_growth
-    return pd.DataFrame(rows)
+The data is a **small sample of listings** (asking prices, not sale prices), not a full market survey.
 
+## Key findings (default scenario: $360K condo, 25% down)
 
-def first_month(s: Scenario) -> dict:
-    loan = s.price * (1 - s.down_pct)
-    pmt = monthly_payment(loan, s.mortgage_rate, s.term_years) if loan > 0 else 0.0
-    costs = {
-        "mortgage": pmt,
-        "property tax": s.price * s.property_tax_rate / 12,
-        "HOA": s.hoa_monthly,
-        "insurance": s.insurance_annual / 12,
-        "maintenance": s.price * s.maintenance_pct / 12,
-        "utilities (whole unit)": s.utilities_total,
-        "mortgage insurance": loan * s.pmi_rate / 12 if s.down_pct < 0.2 else 0.0,
-    }
-    income = {
-        "roommate rent (after vacancy)": s.roommate_rent * (1 - s.vacancy),
-        "roommate's share of utilities": s.utilities_total * s.roommate_util_share,
-    }
-    net_own = sum(costs.values()) - sum(income.values())
-    net_rent = s.own_bedroom_rent + s.renter_utilities + s.renter_parking + s.renters_insurance_annual / 12
-    return {"costs": costs, "income": income, "net_own": net_own, "net_rent": net_rent}
+- Owning costs the family about **$2,220 a month** net after the roommate pays, compared with about **$1,320** to rent a bedroom.
+- After 4 years, renting and investing leaves the family about **$76K ahead**, even after counting the roommate income.
+- Buying a **smaller loan helps but doesn't flip the result.** Paying all cash cuts the gap to about $42K after 4 years.
+- Buying wins only when several things line up. For example: all cash, a low return on the alternative (3%), and condo prices rising about 3% a year gives buying a lead of about **$16K** after 4 years.
+- **Condo price growth** drives the outcome the most:
 
+| Condo price change | 2 years | 4 years | 6 years | 8 years |
+|---|---|---|---|---|
+| −5% per year | −$92K | −$148K | −$200K | −$248K |
+| −2% per year | −$73K | −$114K | −$154K | −$193K |
+| 0% per year | −$60K | −$89K | −$119K | −$149K |
+| +2% per year | −$47K | −$63K | −$79K | −$98K |
+| +5% per year | −$26K | −$20K | −$13K | −$5K |
 
-def sensitivity(s, horizons=(2, 4, 6, 8), appreciations=(-0.05, -0.02, 0.0, 0.02, 0.05)):
-    out = {}
-    for a in appreciations:
-        df = simulate(replace(s, appreciation=a, years=max(horizons)))
-        out[f"{a:+.0%} per year"] = [df.loc[df.year == h, "buy_advantage"].iloc[0] for h in horizons]
-    return pd.DataFrame(out, index=[f"{h} yrs" for h in horizons]).T
+*Buy advantage vs. renting. Negative means renting wins.*
 
+**Why:** after HOA, property tax, insurance, and maintenance, the unit earns a thin return (roughly 3% before financing), which is below what the same cash could earn elsewhere. Borrowing at about 7.75% makes that worse.
 
-if __name__ == "__main__":
-    s = Scenario()
-    fm = first_month(s)
-    print("Month 1, buying the 2x2 with a roommate")
-    for k, v in fm["costs"].items():
-        print(f"  {k:<32}${v:>7,.0f}")
-    for k, v in fm["income"].items():
-        print(f"  less {k:<27}${v:>7,.0f}")
-    print(f"  {'NET cost to the family':<32}${fm['net_own']:>7,.0f}   vs renting a bedroom ${fm['net_rent']:,.0f}\n")
+## Run it
 
-    df = simulate(s)
-    print(df.loc[df.year.isin([2, 4, 6, 10]), ["year", "buy_net_worth", "rent_net_worth", "buy_advantage"]]
-            .round(0).to_string(index=False))
-    print("\nBuy advantage ($), positive = buying wins:")
-    print(sensitivity(s).round(0).to_string())
+```bash
+pip install pandas matplotlib   # matplotlib is optional
+python west_campus_2x2.py
+```
 
-    print("\nAll-cash purchase:")
-    dc = simulate(replace(s, down_pct=1.0))
-    print(dc.loc[dc.year.isin([2, 4, 6]), ["year", "buy_advantage"]].round(0).to_string(index=False))
+To test your own scenario:
+
+```python
+from dataclasses import replace
+from west_campus_2x2 import Scenario, simulate, breakeven_year
+
+s = Scenario(price=300_000, down_pct=1.0, hoa_monthly=300, roommate_rent=1_000)
+df = simulate(s)
+print(df[["year", "buy_net_worth", "rent_net_worth", "buy_advantage"]])
+```
+
+The interactive page (`west-campus-2x2.html`) is a single file that runs in any browser. It has sliders for condo price change, down payment, mortgage rate, years held, and investment return.
+
+## Validation
+
+The model is implemented twice, in Python and in JavaScript. I checked that both versions give identical results (to the dollar) on several scenarios before publishing.
+
+## Limitations
+
+- Small listing sample and asking prices, not a statistical market study.
+- Ignores income tax on rental income (partly offset by depreciation and expenses), capital gains tax on sale, and Texas property tax appraisal caps.
+- Assumes steady returns and steady price growth. Real returns and prices vary a lot, so a Monte Carlo version would show the range.
+- Doesn't model the time and legal responsibility of being a landlord or HOA rules on renting.
+- A cash buyer's real alternative may not be a diversified investment portfolio, and the right return to use is a judgment call. The page lets you change it.
+
+## Project files
+
+| File | What it is |
+|---|---|
+| `west_campus_2x2.py` | Python model and sensitivity analysis |
+| `west-campus-2x2.html` | Interactive tool (single file) |
+| `rent_vs_buy.py` | General Austin condo vs. apartment model |
+| `austin-rent-vs-buy.html` | Interactive tool for the general model |
+
+## Ideas for next steps
+
+- Monte Carlo simulation of price and return paths
+- A "keep or sell at graduation" comparison
+- Pull listing data from a public dataset instead of by hand
+- Add federal income tax on rental income
+
+*Built with help from Claude (Anthropic).*
